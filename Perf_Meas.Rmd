@@ -1,0 +1,411 @@
+---
+title: "Perf_Meas"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(reshape2)
+library(ggthemes)
+library(RCurl)
+library(ggridges)
+```
+
+## Load Data
+```{r}
+dat_212 <- read.csv("US212 Trucks and Passenger 2014-16.csv")
+dat_212$DateTime <- as.POSIXct(dat_212$measurement_tstamp, format = "%m/%d/%Y %H:%M")
+```
+
+```{r load 494}
+# write.csv(WB_494_TT_melt[WB_494_TT_melt$Accumulated_Distance ==4,],'494_data.csv')
+dat_494 <- read.csv('494_data.csv') %>% arrange(DateTime)
+dat_494$DateTime <- as.POSIXct(dat_494$DateTime, format = '%Y-%m-%d %H:%M', tz = 'UTC')
+dat_494$DateTime <- as.POSIXct(format(dat_494$DateTime, tz = 'US/Central'))
+```
+
+```{r load 169}
+dat_169 <- read.csv('US-169_Southbound_118N05070_to_118N05069.csv', stringsAsFactors = FALSE)
+```
+
+## sparklines
+```{r sparklines data}
+
+dat %>%
+  filter(tmc_code == tmc_code[1]) %>%
+  mutate(Hour = hour(DateTime)) %>%
+  group_by(Hour) %>%
+  summarise(Summary = mean(travel_time_seconds ,na.rm = TRUE))
+  
+dat_tmc <- dat %>%
+  filter(tmc_code == '118+05329',
+         year(DateTime) == 2016) %>%
+  mutate(Hour = hour(DateTime),
+         TTI = round(travel_time_seconds/220,1),
+         Month = months(DateTime),
+         Day_time = hour(DateTime) + minute(DateTime)/60,
+         Day_no = day(DateTime),
+         Day = weekdays(DateTime)) %>%
+  group_by(Month, Day, Hour, Day_no) %>%
+  summarise(TTI = mean(TTI, na.rm = TRUE)) %>%
+  # select(DateTime, TTI, Month, Day_time, Day) %>%
+  select(TTI, Month, Day, Hour, Day_no) %>%
+  filter(TTI < 40,
+         Month == 'April',
+         Day_no %in% c(1:4)
+         ) %>%
+  arrange(Hour)
+  
+# dat_tmc$TTI <- rollmean(dat_tmc$TTI,4, na.pad = TRUE) 
+# dat_tmc <- dat_tmc[!is.na(dat_tmc$TTI),]
+```
+
+```{r sparklines}
+
+mins <- group_by(dat_tmc, Day) %>% slice(which.min(TTI))
+maxs <- group_by(dat_tmc, Day) %>% slice(which.max(TTI))
+ends <- group_by(dat_tmc, Day) %>% filter(Hour == max(Hour))
+quarts <- dat_tmc %>% group_by(Day) %>%
+  summarize(quart1 = quantile(TTI, 0.9, na.rm = TRUE),
+            quart2 = quantile(TTI, 0.95, na.rm = TRUE)) %>%
+  right_join(dat_tmc)
+
+# d <- dat_tmc[grepl('2016-01-01',dat_tmc$DateTime),]
+# q <- d %>% group_by(Day) %>%
+#   summarize(quart1 = quantile(TTI, 0.9, na.rm = TRUE),
+#             quart2 = quantile(TTI, 0.95, na.rm = TRUE)) %>%
+#   right_join(dat_tmc)
+# mins <- slice(d, which.min(d$TTI))
+# maxs <- slice(d, which.max(d$TTI))
+# ends <- filter(d, Day_time == max(Day_time))
+
+g <- ggplot(dat_tmc, aes(x=Hour, y=TTI))+
+  facet_grid(Day ~ ., scales = 'free_y') +
+  # geom_ribbon(data = quarts, aes(ymin = quart1, max = quart2), fill = 'grey90')+
+  geom_line(data = quarts, aes(x = Hour, y = quart1), color = 'red') +
+  geom_line(size = 0.3) +
+  geom_point(data = mins, col = 'red') +
+  geom_point(data = maxs, col = 'blue') +
+  geom_text(data = mins, aes(label = TTI), vjust = -1) +
+  geom_text(data = maxs, aes(label = TTI), vjust = 2.5) +
+  geom_text(data = ends, aes(label = TTI), hjust = 0, nudge_x = 1) +
+  geom_text(data = ends, aes(label = Day), hjust = 0, nudge_x = 5) +
+  expand_limits(x = max(dat_tmc$Hour) + (0.25 * (max(dat_tmc$Hour) - min(dat_tmc$Hour)))) +
+  scale_x_continuous(breaks = seq(0, 24, 4)) +
+  scale_y_continuous(breaks = c(-.25, 1.5)) +
+  theme_tufte(base_size = 15, base_family = "Helvetica") +
+  theme(axis.title=element_blank(), axis.text.y = element_blank(), 
+        axis.ticks = element_blank(), strip.text = element_blank())
+
+```
+
+## plot_TTI
+```{r plot_TTI, fig.width=12}
+plot_TTI <- function(data, offset, location){
+  
+  dat <- data
+  
+  max_TTI <- round(max(dat$TTI),2)
+  min_TTI <- round(min(dat$TTI),2)
+  step_TTI <- round((max_TTI - min_TTI)/8,2)
+  y_breaks <- seq(min_TTI, max_TTI, step_TTI)
+  max_DT <- as.POSIXct(max(dat$DateTime))+900
+  min_DT <- as.POSIXct(min(dat$DateTime))
+  step_DT <- (max_DT - min_DT)/4
+  x_breaks <- seq(min_DT, max_DT, step_DT)
+  
+  ggplot(dat, aes(x = DateTime , y = TTI)) + 
+    geom_line() + 
+    # geom_rug() +
+    # geom_point(size=1) +
+    theme_tufte(base_size = 15) +
+    theme(axis.title=element_blank()) +
+    geom_hline(yintercept = Quant, lty=2) +
+    annotate('text',x = min(dat$DateTime), y = Quant + offset, family = 'serif',
+             label = paste('90th PCTL:', Quant), hjust = 0) +
+    scale_y_continuous(breaks = y_breaks) +
+    scale_x_datetime(breaks = x_breaks,
+                     labels = scales::date_format('%H:%M', tz = 'US/Central')) +
+    labs(title = paste('TTI vs Time on',
+                  paste(weekdays(as.POSIXct(select_Day, format=('%m/%d/%Y'))),
+                        ',',sep=''),
+                  select_Day, location),
+         caption = 'Dashed line shows 90th Pecentile for entire year') +
+    theme(plot.title = element_text(size = 15))
+}
+```
+
+``` {r 212, fig.height = 4, fig.width = 10}
+
+select_Day <- '01/11/2016'
+dat_tmc <- dat_212 %>%
+  filter(tmc_code == '118+05329') %>%
+  mutate(TTI = round(travel_time_seconds/211,4),
+         Yday = format(DateTime,'%m/%d/%Y'),
+         Quant = quantile(TTI, .9, na.rm = TRUE)) %>%
+  select(Yday, DateTime, TTI, Quant) %>%
+  filter(Yday == select_Day)
+
+Quant <- round(dat_tmc$Quant[1],2)
+
+plot_TTI(dat_tmc,0.04, location = '\nUS-212, Chaska')
+```
+
+```{r,fig.height = 4, fig.width = 10}
+select_Day <- '03/30/2017'
+dat_tmc <- dat_494 %>%
+  filter(Accumulated_Distance == 4) %>%
+  mutate(TTI = round(TT/3.4,4),
+         Yday = format(DateTime,'%m/%d/%Y'),
+         Quant = quantile(TTI, .90, na.rm = TRUE)) %>%
+  select(Yday,DateTime, TTI, TT, Quant) %>%
+  filter(Yday == select_Day)
+
+Quant <- round(dat_tmc$Quant[1],2)
+
+plot_TTI(data = dat_tmc, 0.04, '\nI-494, Bloomington')
+
+```
+
+
+
+```{r 169, fig.height = 4, fig.width = 10}
+select_Day <- '08/12/2015'
+dat_tmc <- dat_169 %>%
+  mutate(DateTime = as.POSIXct(Timestamp, format = '%Y-%m-%d %H:%M:%S')) %>%
+  filter(Travel.Time..minutes. != "N/A") %>%
+  mutate(TTI = round(as.numeric(Travel.Time..minutes.)/2.3,4),
+         Yday = format(DateTime,'%m/%d/%Y'),
+         Quant = quantile(TTI, .90, na.rm = TRUE)) %>%
+  select(Yday,DateTime, TTI, Quant) %>%
+  filter(Yday == select_Day)
+
+Quant <- round(dat_tmc$Quant[1],2)
+
+plot_TTI(data = dat_tmc, 0.03,'\nUS-169, Shakopee')
+```
+
+
+
+## calendar
+
+```{r}
+source("calendarC.R")
+
+# Load data from .dbf file and aggregate by day
+library(foreign)
+```
+
+
+```{r 212 calendar}
+
+dat_cal_212 <- function(TTI_){
+ dat_212 %>%
+  filter(tmc_code == '118+05329',
+         year(DateTime) == 2015) %>%
+  mutate(TTI = round(travel_time_seconds/211,4),
+         Yday = format(DateTime,'%Y-%m-%d'),
+         Cong = ifelse(TTI > TTI_,1,0)) %>%
+  select(Yday, DateTime, TTI, Cong) %>%
+  group_by(Yday) %>%
+  summarise(Time  = sum(Cong * 0.08333))
+}
+par(mfrow = c(1,1), oma=c(0, 0, 0, 0), mar=c(0, 0, 0, 0))
+
+dat_cal_212_125 <- dat_cal_212(1.25)
+Dates <- dat_cal_212_125$Yday
+TT <- (ifelse(is.na(dat_cal_212_125$Time),1, dat_cal_212_125$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI=1.25)
+
+dat_cal_212_15 <- dat_cal_212(1.5)
+Dates <- dat_cal_212_15$Yday
+TT <- (ifelse(is.na(dat_cal_212_15$Time),1, dat_cal_212_15$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI=1.5)
+
+dat_cal_212_2 <- dat_cal_212(2)
+Dates <- dat_cal_212_15$Yday
+TT <- (ifelse(is.na(dat_cal_212_15$Time),1, dat_cal_212_15$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI=2)
+
+```
+
+```{r 494 calendar}
+
+
+dat_cal_494 <- function(TTI_){
+  dat_494 %>%
+  filter(Accumulated_Distance == 4) %>%
+  mutate(TTI = round(TT/3.69,4),
+         Yday = format(DateTime,'%Y-%m-%d'),
+         Cong = ifelse(TTI > TTI_,1,0)) %>%
+  select(Yday,DateTime, TTI, Cong) %>%
+  group_by(Yday) %>%
+  summarise(Time  = sum(Cong * 0.25)) %>%
+  filter(!grepl('2018',Yday),
+         !is.na(Yday))
+}
+
+dat_cal_494_125 <- dat_cal_494(1.25)
+Dates <- dat_cal_494_125$Yday
+TT <- (ifelse(is.na(dat_cal_494_125$Time),1, dat_cal_494_125$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI=1.25)
+
+dat_cal_494_15 <- dat_cal_494(1.5)
+Dates <- dat_cal_494_15$Yday
+TT <- (ifelse(is.na(dat_cal_494_15$Time),1, dat_cal_494_15$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI=1.5)
+
+dat_cal_494_2 <- dat_cal_494(2)
+Dates <- dat_cal_494_2$Yday
+TT <- (ifelse(is.na(dat_cal_494_2$Time),1, dat_cal_494_2$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI=2)
+
+```
+
+
+
+```{r 169 calendar}
+
+
+dat_cal_169 <- function(TTI_){
+  dat_169 %>%
+  mutate(DateTime = as.POSIXct(Timestamp, format = '%Y-%m-%d %H:%M:%S')) %>%
+  filter(Travel.Time..minutes. != "N/A") %>%
+  mutate(TTI = round(as.numeric(Travel.Time..minutes.)/2.3,4),
+         Yday = format(DateTime,'%Y-%m-%d'),
+         Cong = ifelse(TTI > TTI_,1,0)) %>%
+  select(Yday,DateTime, TTI, Cong) %>%
+  group_by(Yday) %>%
+  summarise(Time  = sum(Cong * 0.25)) %>%
+  filter(grepl('2016',Yday))
+} 
+
+dat_cal_169_125 <- dat_cal_169(1.25)
+Dates <- dat_cal_169_125$Yday
+TT <- (ifelse(is.na(dat_cal_169_125$Time),1, dat_cal_169_125$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI = 1.25)
+
+dat_cal_169_15 <- dat_cal_169(1.5)
+Dates <- dat_cal_169_15$Yday
+TT <- (ifelse(is.na(dat_cal_169_15$Time),1, dat_cal_169_15$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI = 1.5)
+
+dat_cal_169_2 <- dat_cal_169(2)
+Dates <- dat_cal_169_2$Yday
+TT <- (ifelse(is.na(dat_cal_169_2$Time),1, dat_cal_169_2$Time + 1))
+calendarFlow(Dates, TT, palette="blue", TTI = 2)
+```
+
+
+
+
+## range
+
+
+``` {r 494 range, fig.height = 5, fig.width = 12}
+
+dat_range <- dat_494 %>%
+  filter(Accumulated_Distance == 4) %>%
+  mutate(TTI = round(ifelse(TT/3.4 < 1,1,TT/3.4),4),
+         Day = factor(day(DateTime)),
+         Hour = factor(hour(DateTime)),
+         TT = as.numeric(TT),
+         Speed = 4*(60/TT))%>%
+  select(Day,DateTime, TTI, TT, Hour, Speed) %>%
+  filter(TT > 0)
+
+# dat_range$Month <- months(dat_range$DateTime, abbr = TRUE) %>%
+#   as.factor() %>%
+#   factor(levels =
+#            c('Jan','Feb','Mar','Apr','May',
+#              'Jun','Jul','Aug','Sep','Oct','Nov','Dec'))
+# dat_range$Month <- fct_rev(dat_range$Month)
+# dat_range <- dat_range[!is.na(dat_range$Month),]
+
+
+ggplot(dat_range, aes(Speed,Hour, group = Hour, fill = ..x..)) +
+  # theme_tufte() +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01, gradient_lwd = 1.) + 
+  theme(axis.title=element_blank())+
+  scale_x_continuous(expand = c(0.01, 0)) +
+  scale_y_discrete(expand = c(0.01, 0)) +
+  viridis::scale_fill_viridis(name = "TT", option = 'C') +
+  theme_ridges(font_size = 13, grid = TRUE) +
+  xlab('Speed (mph)')+
+  labs(title = "Variation in Speed in each hour of the day on section of I-494 (Bloomington)",
+       subtitle = 'Values plotted represent one year of data from 2017\nSlower speeds are evident in the peak hours')
+```
+
+``` {r 212 range, fig.height = 5, fig.width = 12}
+
+dat_range <-  dat_212 %>%
+  filter(tmc_code == '118+05329',
+         year(DateTime) == 2015) %>%
+  mutate(TTI = round(travel_time_seconds/211,4),
+         Yday = format(DateTime,'%Y-%m-%d'),
+         Hour = factor(hour(DateTime)),
+         TT = as.numeric(travel_time_seconds),
+         Speed = 3.28*(3600/TT)) %>%
+  select(DateTime, TTI, TT, Hour, Speed) %>%
+  filter(TT > 0,
+         TT < quantile(TT, .99, na.rm = TRUE))
+
+# dat_range$Month <- months(dat_range$DateTime, abbr = TRUE) %>%
+#   as.factor() %>%
+#   factor(levels =
+#            c('Jan','Feb','Mar','Apr','May',
+#              'Jun','Jul','Aug','Sep','Oct','Nov','Dec'))
+# dat_range$Month <- fct_rev(dat_range$Month)
+# dat_range <- dat_range[!is.na(dat_range$Month),]
+
+
+ggplot(dat_range, aes(Speed,Hour, group = Hour, fill = ..x..)) +
+  # theme_tufte() +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01, gradient_lwd = 1.) + 
+  theme(axis.title=element_blank())+
+  scale_x_continuous(expand = c(0.01, 0)) +
+  scale_y_discrete(expand = c(0.01, 0)) +
+  viridis::scale_fill_viridis(name = "TT", option = 'C') +
+  theme_ridges(font_size = 13, grid = TRUE) +
+  xlab('Speed (mph)')+
+  labs(title = "Variation in Speed in each hour of the day on section of US-212 (Chaska)",
+       subtitle = 'Values plotted represent one year of data from 2015\nSlower speeds are evident in the peak hours')
+```
+
+``` {r 169 range, fig.height = 5, fig.width = 12}
+
+dat_range <-  dat_169 %>%
+  filter(tmc_code == '118+05329',
+         year(DateTime) == 2015) %>%
+  mutate(TTI = round(travel_time_seconds/211,4),
+         Yday = format(DateTime,'%Y-%m-%d'),
+         Hour = factor(hour(DateTime)),
+         TT = as.numeric(travel_time_seconds),
+         Speed = 3.28*(3600/TT)) %>%
+  select(DateTime, TTI, TT, Hour, Speed) %>%
+  filter(TT > 0,
+         TT < quantile(TT, .99, na.rm = TRUE))
+
+# dat_range$Month <- months(dat_range$DateTime, abbr = TRUE) %>%
+#   as.factor() %>%
+#   factor(levels =
+#            c('Jan','Feb','Mar','Apr','May',
+#              'Jun','Jul','Aug','Sep','Oct','Nov','Dec'))
+# dat_range$Month <- fct_rev(dat_range$Month)
+# dat_range <- dat_range[!is.na(dat_range$Month),]
+
+
+ggplot(dat_range, aes(Speed,Hour, group = Hour, fill = ..x..)) +
+  # theme_tufte() +
+  geom_density_ridges_gradient(scale = 3, rel_min_height = 0.01, gradient_lwd = 1.) + 
+  theme(axis.title=element_blank())+
+  scale_x_continuous(expand = c(0.01, 0)) +
+  scale_y_discrete(expand = c(0.01, 0)) +
+  viridis::scale_fill_viridis(name = "TT", option = 'C') +
+  theme_ridges(font_size = 13, grid = TRUE) +
+  xlab('Speed (mph)')+
+  labs(title = "Variation in Speed in each hour of the day on section of US-212 (Chaska)",
+       subtitle = 'Values plotted represent one year of data from 2015\nSlower speeds are evident in the peak hours')
+```
