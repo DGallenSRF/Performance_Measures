@@ -1,0 +1,1 @@
+All fields for NPMRDS from INRIX (Trucks and passenger vehicles) data for 12 TMCs from Jan 01, 2017 through Dec 31, 2017

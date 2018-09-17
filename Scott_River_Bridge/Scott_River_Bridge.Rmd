@@ -1,0 +1,54 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(lubridate)
+library(reshape2)
+library(ggthemes)
+library(RCurl)
+library(ggridges)
+library(leaflet)
+```
+
+```{r load 169}
+knitr::opts_knit$set(root.dir = "H:/Projects/11000/11408/TS/Performance Measures/Scott_River_Bridge")
+dir()
+dat_169 <- read.csv('River_Bridge_169_2017.csv', stringsAsFactors = FALSE)
+metadat <- read.csv('TMC_Identification.csv')
+```
+
+```{r}
+tmc_list <- data.frame(tmc_code = c('118P04465','118+04466','118P04466','118+04467'),
+                       Desc = c('CR_21_INT_NB','CR_21_INT_to_101_INT_NB','101_INT_NB',
+                                'FERRY_BRIDGE_NB'))
+
+scott_meta <- metadat %>%
+  filter(tmc %in% tmc_list$tmc_code) %>%
+  droplevels() %>%
+  select(1:14) %>%
+  melt(measure.vars = c('start_longitude','end_longitude'),
+       value.name = 'Lon',
+       variable.name = 'Loc') %>%
+  mutate(index = seq(1,length(state),1)) %>%
+  melt(measure.vars = c('start_latitude','end_latitude'),
+       value.name = 'Lat') %>%
+  mutate(Location = ifelse(grepl('start',Loc),'Start','End')) %>%
+  select(-Loc,-variable) 
+
+scott_meta <- scott_meta[!duplicated(scott_meta$index),]
+```
+
+```{r}
+leaflet(data= scott_meta) %>%
+  addTiles() %>%
+  addMarkers(~Lon,~Lat, popup = ~ as.character(tmc), label = ~ as.character(tmc))
+```
+
+```{r}
+scott_meta %>%
+  select(tmc,road,direction,intersection,miles)
+```
